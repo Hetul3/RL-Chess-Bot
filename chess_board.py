@@ -1,7 +1,11 @@
 import chess
 import chess.engine
-import numpy as np
-import torch
+from IPython.display import SVG, display
+import chess.svg
+
+# print in an aesthetic way
+def print_board(board):
+    display(SVG(chess.svg.board(board=board)))
 
 # printing the legal moves
 def print_legal_moves(board):
@@ -9,17 +13,6 @@ def print_legal_moves(board):
     for move in board.legal_moves:
         print(move, end=" ")
     print()
-    
-def board_to_tensor(board):
-    pieces = ['p', 'n', 'b', 'r', 'q', 'k', 'P', 'N', 'B', 'R', 'Q', 'K']
-    # tensor, represents all 12 pieces with a board for each piece showing where they are
-    tensor = torch.zeros(12, 8, 8)
-    for i, piece in enumerate(pieces):
-        for square in board.pieces(chess.PIECE_SYMBOLS.index(piece.lower()), piece.isupper()):
-            rank, file = divmod(square, 8)
-            tensor[i][rank][file] = 1
-            
-    return tensor
     
 def main():
     #setting up board and stockfish
