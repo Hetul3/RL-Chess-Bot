@@ -31,19 +31,22 @@ class ChessModel(nn.Module):
         x = self.fc2(x)
         return x
     
-    def get_move_probabilities(self, board_tensor, legal_moves):
+    def get_move(self, board_tensor, legal_moves):
         with torch.no_grad():
-            output = self(board_tensor.unsqueeze(0))
-        probabilities = F.softmax(output, dim=1).squeeze()
+            q_values = self(board_tensor.unsqueeze(0)).squeeze()
+            
+        best_move = None
+        best_value = float('-inf')
         
-        move_probs = []
         for move in legal_moves:
             from_square = move.from_square
             to_square = move.to_square
-            prob = probabilities[from_square * 64 + to_square].item()
-            move_probs.append((move, prob))
+            move_value = q_values[from_square * 64 + to_square].item()
+            if move_value > best_value:
+                best_value = move_value
+                best_move = move
             
-        return move_probs
+        return best_move
     
 
 def board_to_tensor(board):
