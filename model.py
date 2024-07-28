@@ -6,14 +6,16 @@ import chess
 class ChessModel(nn.Module):
     def __init__(self, num_channels=14, num_filters=256):
         super(ChessModel, self).__init__()
-        # input channels: 12 since we have 12 board representations, num_filters: 256 number of feature maps that will be produced through dot producting the filter with the input, kernal_size: 3 size of the filter (3x3), padding: 1 will add 1 pizel to all sides of the input
+        # input channels: 14, num_filters: 256 number of feature maps that will be produced through dot producting the filter with the input, kernal_size: 3 size of the filter (3x3), padding: 1 will add 1 pizel to all sides of the input
         self.conv1 = nn.Conv2d(num_channels, num_filters, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1)
         
         self.bn1 = nn.BatchNorm2d(num_filters)
         self.bn2 = nn.BatchNorm2d(num_filters)
         self.bn3 = nn.BatchNorm2d(num_filters)
+        self.bn4 = nn.BatchNorm2d(num_filters)
         
         # flattens feature map to a 1D tensor and outputs 1024 features (converting to 1024 useful features about the board)
         self.fc1 = nn.Linear(num_filters * 8 * 8, 1024)
@@ -24,6 +26,7 @@ class ChessModel(nn.Module):
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
+        x = F.relu(self.bn4(self.conv4(x)))
         
         # reshape the tensor, flattening it from a (batch_size, 256, 8, 8), where the feature map is flattened so now it's a 2D tensor (batch_size, 256*8*8), -1 means the size of the tensor will be inferred
         x = x.view(-1, 256*8*8)

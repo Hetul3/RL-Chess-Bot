@@ -20,7 +20,7 @@ class ReplayMemory:
         return len(self.memory)
     
 class DQNAgent:
-    def __init__(self, model, learning_rate=0.0001, gamma=0.99, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.995):
+    def __init__(self, model, learning_rate=0.001, gamma=0.99, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.995):
         self.model = model
         self.target_model = type(model)()
         self.target_model.load_state_dict(model.state_dict())
@@ -31,6 +31,7 @@ class DQNAgent:
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
         
+    # exploration implementation, model will start off exploring random moves to learn, as it fine tunes, it will start to exploit the best moves it knows
     def select_action(self, state, legal_moves):
         if random.random() > self.epsilon:
             return self.model.get_move(state, legal_moves)

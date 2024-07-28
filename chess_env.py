@@ -3,8 +3,10 @@ import chess.engine
 import random
 from model import board_to_tensor
 
+# environment the bot will run in
 class ChessEnv:
-    def __init__(self, stockfish_path, skill_level=0, max_depth=1, blunder_probability=1, think_time=0.03):
+    def __init__(self, stockfish_path, skill_level=0, max_depth=None, blunder_probability=0, think_time=0.03):
+        # stockfish has some paramters, skill_level 0 is roughly 1350 elo, everything else is self explanatory
         self.board = chess.Board()
         self.stockfish = chess.engine.SimpleEngine.popen_uci(stockfish_path)
         self.previous_evaluation = 0
@@ -19,6 +21,7 @@ class ChessEnv:
         else:
             raise ValueError("Skill level must be between 0 and 20")
         
+    # reset the board after a game, including the evaluation
     def reset(self):
         self.board.reset()
         self.previous_evaluation = 0
@@ -26,6 +29,7 @@ class ChessEnv:
     
     def get_board_evaluation(self):
         try:
+            # analyze the board only for white (current bot will always be playing white)
             result = self.stockfish.analyse(self.board, chess.engine.Limit(time=self.think_time, depth=self.max_depth))
             score = result['score'].white().score()
             print(f"Score: {score}")
@@ -45,36 +49,42 @@ class ChessEnv:
                 return 0
     
     def calculate_evaluation_reward(self, current_evaluation):
+        # reward on each move is the difference of evaluation, only accumulating current evaluation incentises short games to lose quickly when in bad position
         if current_evaluation is None:
             reward = 0
         else:
-            reward = (current_evaluation - self.previous_evaluation)
+            reward = float(current_evaluation - self.previous_evaluation) / 200.0
         self.previous_evaluation = current_evaluation if current_evaluation is not None else self.previous_evaluation
         return reward
     
     def step(self, move):
+        # extra check to make sure move is legal
         if move in self.board.legal_moves:
             self.board.push(move)
         else:
             return board_to_tensor(self.board), -10, True, "Illegal move"
         
+        # evaluation after bot move
         current_evaluation = self.get_board_evaluation()
-        evaluation_reward = float(self.calculate_evaluation_reward(current_evaluation)) / 100.0
+        evaluation_reward = self.calculate_evaluation_reward(current_evaluation)
         
+        # reward for losing, winning, and drawing. Shouldn't be too punishing to losing to stockfish
         if self.board.is_game_over():
             print(self.board)
             if self.board.result() == "1-0":
                 print("Win")
-                return board_to_tensor(self.board), 100 + evaluation_reward, True, "Win"
+                return board_to_tensor(self.board), 500 + evaluation_reward, True, "Win"
             elif self.board.result() == "0-1":
                 print("Loss")
-                return board_to_tensor(self.board), -5 + evaluation_reward, True, "Loss"
+                return board_to_tensor(self.board), -15 + evaluation_reward, True, "Loss"
             else:
                 print("Draw")
-                return board_to_tensor(self.board), 10 + evaluation_reward, True, "Draw"
+                return board_to_tensor(self.board), 40 + evaluation_reward, True, "Draw"
         
+        # stockfish turn
         result = self.stockfish.play(self.board, chess.engine.Limit(time=self.think_time, depth=self.max_depth))
         
+        # depending on blunder probability, make it play a random legal move
         if random.random() < self.blunder_probability:
             legal_moves = list(self.board.legal_moves)
             if legal_moves:
@@ -82,23 +92,25 @@ class ChessEnv:
         
         self.board.push(result.move)
         
+        # evaluation after stockfish move
         if not self.board.is_game_over():
             current_evaluation = self.get_board_evaluation()
-            evaluation_reward += float(self.calculate_evaluation_reward(current_evaluation)) / 100.0
+            evaluation_reward += self.calculate_evaluation_reward(current_evaluation)
         
         if self.board.is_game_over():
             print(self.board)
             if self.board.result() == "1-0":
                 print("Win")
-                return board_to_tensor(self.board), 100 + evaluation_reward, True, "Win"
+                return board_to_tensor(self.board), 500 + evaluation_reward, True, "Win"
             elif self.board.result() == "0-1":
                 print("Loss")
-                return board_to_tensor(self.board), -5 + evaluation_reward, True, "Loss"
+                return board_to_tensor(self.board), -15 + evaluation_reward, True, "Loss"
             else:
                 print("Draw")
-                return board_to_tensor(self.board), 10 + evaluation_reward, True, "Draw"
+                return board_to_tensor(self.board), 40 + evaluation_reward, True, "Draw"
             
-        return board_to_tensor(self.board), 0.5 + evaluation_reward, False, "Ongoing"
+        # if the game is ongoing, we want to reward the bot for surviving longer
+        return board_to_tensor(self.board), 1.3 + evaluation_reward, False, "Ongoing"
         
     def close(self):
         self.stockfish.quit()

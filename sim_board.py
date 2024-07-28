@@ -5,7 +5,7 @@ import torch
 torch.set_num_threads(1)    # limiting threads running so it doesn't fry my macbook air :(
 
 def train(episodes=1000, batch_size=128, target_update=10):
-    env = ChessEnv(stockfish_path="stockfish/stockfish", skill_level=0, max_depth=3, blunder_probability=0.3, think_time=0.001)
+    env = ChessEnv(stockfish_path="stockfish/stockfish", skill_level=0, max_depth=None, blunder_probability=0.05, think_time=0.001)
     model = ChessModel()
     agent = DQNAgent(model)
     
@@ -14,6 +14,7 @@ def train(episodes=1000, batch_size=128, target_update=10):
     total_loss = 0
     
     for episode in range(episodes):
+        # reset everything for new game
         state = env.reset()
         total_reward = 0
         evaluation_reward = 0
@@ -22,8 +23,8 @@ def train(episodes=1000, batch_size=128, target_update=10):
         
         while not done:
             legal_moves = env.get_legal_moves()
-            action = agent.select_action(state, legal_moves)
-            next_state, reward, done, _ = env.step(action)
+            action = agent.select_action(state, legal_moves)    # bot selects move
+            next_state, reward, done, _ = env.step(action)  # bot move is evaluated and stockfish makes a move
             total_reward += reward
             evaluation_reward += reward - 1
             moves_in_game += 1
