@@ -7,7 +7,9 @@ from supervised_dataset_extraction import load_puzzle_data, process_puzzles
 import chess
 import time
 import logging
-torch.set_num_threads(1) 
+from tqdm import tqdm
+import os
+torch.set_num_threads(2) 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -35,13 +37,14 @@ class ChessPuzzleDataset(Dataset):
 
         return board_tensor, target
 
-def train_model(model, train_loader, criterion, optimizer, device, num_epochs=10):
+def train_model(model, train_loader, criterion, optimizer, device, start_epoch, num_epochs=20):
     model.train()
     total_batches = len(train_loader)
     
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         running_loss = 0.0
         start_time = time.time()
+        progress_bar = tqdm(total=total_batches, desc="Epoch {}".format(epoch + 1))
         
         for i, (boards, targets) in enumerate(train_loader):
             boards, targets = boards.to(device), targets.to(device)
@@ -53,6 +56,8 @@ def train_model(model, train_loader, criterion, optimizer, device, num_epochs=10
             optimizer.step()
             
             running_loss += loss.item()
+            progress_bar.set_postfix({'loss': '{:.4f}'.format(loss.item())})
+            progress_bar.update()  # Update the progress bar
             
             if (i + 1) % 50 == 0:
                 logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Batch [{i + 1}/{total_batches}], '
@@ -62,6 +67,14 @@ def train_model(model, train_loader, criterion, optimizer, device, num_epochs=10
         epoch_time = time.time() - start_time
         logging.info(f'Epoch [{epoch + 1}/{num_epochs}] completed in {epoch_time:.2f} seconds. '
                      f'Average Loss: {epoch_loss:.4f}')
+        
+        # Save model and optimizer state after each epoch
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+        }, 'latest_checkpoint.pth')
 
 def main():
     logging.info("Starting the training process...")
@@ -85,8 +98,17 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
+    start_epoch = 0
+    checkpoint_path = 'latest_checkpoint.pth'
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        logging.info(f"Resuming from checkpoint: {checkpoint_path}")
+    
     logging.info("Starting model training...")
-    train_model(model, train_loader, criterion, optimizer, device)
+    train_model(model, train_loader, criterion, optimizer, device, start_epoch)
     
     logging.info("Training completed. Saving model...")
     torch.save(model.state_dict(), 'supervised_model.pth')
