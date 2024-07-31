@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from model import ChessModel, board_to_tensor
+from model import ChessModel, board_to_tensor, get_lr_scheduler
 from supervised_dataset_extraction import load_puzzle_data, process_puzzles
 import chess
 import time
@@ -37,14 +37,15 @@ class ChessPuzzleDataset(Dataset):
 
         return board_tensor, target
 
-def train_model(model, train_loader, criterion, optimizer, device, start_epoch, num_epochs=20):
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch, num_epochs=20, patience=3):
     model.train()
-    total_batches = len(train_loader)
+    best_val_loss = float('inf')
+    epochs_without_improvement = 0
     
     for epoch in range(start_epoch, num_epochs):
         running_loss = 0.0
         start_time = time.time()
-        progress_bar = tqdm(total=total_batches, desc="Epoch {}".format(epoch + 1))
+        progress_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch + 1}")
         
         for i, (boards, targets) in enumerate(train_loader):
             boards, targets = boards.to(device), targets.to(device)
@@ -56,25 +57,86 @@ def train_model(model, train_loader, criterion, optimizer, device, start_epoch, 
             optimizer.step()
             
             running_loss += loss.item()
-            progress_bar.set_postfix({'loss': '{:.4f}'.format(loss.item())})
-            progress_bar.update()  # Update the progress bar
-            
-            if (i + 1) % 50 == 0:
-                logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Batch [{i + 1}/{total_batches}], '
-                             f'Loss: {loss.item():.4f}')
+            progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
+            progress_bar.update()
         
-        epoch_loss = running_loss / total_batches
+        epoch_loss = running_loss / len(train_loader)
         epoch_time = time.time() - start_time
-        logging.info(f'Epoch [{epoch + 1}/{num_epochs}] completed in {epoch_time:.2f} seconds. '
-                     f'Average Loss: {epoch_loss:.4f}')
         
-        # Save model and optimizer state after each epoch
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss,
-        }, 'latest_checkpoint.pth')
+        # Validate the model
+        val_loss, val_accuracy = validate_model(model, val_loader, criterion, device)
+        
+        # Update learning rate
+        scheduler.step(val_loss)
+        last_lr = scheduler.get_last_lr()
+        
+        logging.info(f'Epoch [{epoch + 1}/{num_epochs}] completed in {epoch_time:.2f} seconds. '
+                     f'Train Loss: {epoch_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}')
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_without_improvement = 0
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss,
+                'val_loss': val_loss,
+                'val_accuracy': val_accuracy,
+            }, 'best_model_checkpoint.pth')
+        else:
+            epochs_without_improvement += 1
+        
+        if epochs_without_improvement >= patience:
+            logging.info(f'Early stopping triggered after {epoch + 1} epochs')
+            break
+    
+    # Load the best model
+    best_checkpoint = torch.load('best_model_checkpoint.pth')
+    model.load_state_dict(best_checkpoint['model_state_dict'])
+    return model
+     
+def validate_model(model, val_loader, criterion, device):
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for boards, targets in val_loader:
+            boards, targets = boards.to(device), targets.to(device)
+            outputs = model(boards)
+            loss = criterion(outputs, targets)
+            total_loss += loss.item()
+            
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+    
+    avg_loss = total_loss / len(val_loader)
+    accuracy = correct / total
+    return avg_loss, accuracy
+
+def test_model(model, test_loader, criterion, device):
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for boards, targets in test_loader:
+            boards, targets = boards.to(device), targets.to(device)
+            outputs = model(boards)
+            loss = criterion(outputs, targets)
+            total_loss += loss.item()
+            
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+    
+    avg_loss = total_loss / len(test_loader)
+    accuracy = correct / total
+    return avg_loss, accuracy
 
 def main():
     logging.info("Starting the training process...")
@@ -82,24 +144,40 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f"Using device: {device}")
     
-    csv_file_path = 'supervised_dataset/lichess_db_puzzle.csv'
-    logging.info(f"Loading puzzle data from {csv_file_path}")
-    puzzles = load_puzzle_data(csv_file_path)
-    logging.info(f"Loaded {len(puzzles)} puzzles")
+    train_csv_path = 'supervised_dataset/larger_lichess_db_puzzle.csv'
+    val_csv_path = 'supervised_dataset/lichess_puzzle_val.csv'
+    test_csv_path = 'supervised_dataset/lichess_puzzle_test.csv'
     
-    processed_data, skipped_puzzles = process_puzzles(puzzles)
-    logging.info(f"Processed {len(processed_data)} puzzles. Skipped {skipped_puzzles} puzzles.")
+    logging.info("Loading and processing puzzle data...")
+    train_puzzles = load_puzzle_data(train_csv_path)
+    val_puzzles = load_puzzle_data(val_csv_path)
+    test_puzzles = load_puzzle_data(test_csv_path)
     
-    dataset = ChessPuzzleDataset(processed_data)
-    train_loader = DataLoader(dataset, batch_size=128, shuffle=True)
-    logging.info(f"Created DataLoader with {len(train_loader)} batches")
+    train_data, train_skipped = process_puzzles(train_puzzles)
+    val_data, val_skipped = process_puzzles(val_puzzles)
+    test_data, test_skipped = process_puzzles(test_puzzles)
+    
+    logging.info(f"Train: processed {len(train_data)}, skipped {train_skipped}")
+    logging.info(f"Validation: processed {len(val_data)}, skipped {val_skipped}")
+    logging.info(f"Test: processed {len(test_data)}, skipped {test_skipped}")
+    
+    train_dataset = ChessPuzzleDataset(train_data)
+    val_dataset = ChessPuzzleDataset(val_data)
+    test_dataset = ChessPuzzleDataset(test_data)
+    
+    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    
+    logging.info(f"Created DataLoaders: Train: {len(train_loader)} batches, Val: {len(val_loader)} batches, Test: {len(test_loader)} batches")
     
     model = ChessModel().to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    scheduler = get_lr_scheduler(optimizer)
     
     start_epoch = 0
-    checkpoint_path = 'latest_checkpoint.pth'
+    checkpoint_path = 'best_model_checkpoint.pth'
     if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path)
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -108,11 +186,15 @@ def main():
         logging.info(f"Resuming from checkpoint: {checkpoint_path}")
     
     logging.info("Starting model training...")
-    train_model(model, train_loader, criterion, optimizer, device, start_epoch)
+    model = train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch)
     
     logging.info("Training completed. Saving model...")
     torch.save(model.state_dict(), 'supervised_model.pth')
     logging.info("Model saved as 'supervised_model.pth'")
+    
+    # Test the model
+    test_loss, test_accuracy = test_model(model, test_loader, criterion, device)
+    logging.info(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}")
 
 if __name__ == '__main__':
     main()

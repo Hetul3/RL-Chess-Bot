@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import chess
 
 class ChessModel(nn.Module):
-    def __init__(self, num_channels=14, num_filters=256):
+    def __init__(self, num_channels=14, num_filters=256, dropout_rate=0.3):
         super(ChessModel, self).__init__()
         # input channels: 14, num_filters: 256 number of feature maps that will be produced through dot producting the filter with the input, kernal_size: 3 size of the filter (3x3), padding: 1 will add 1 pizel to all sides of the input
         self.conv1 = nn.Conv2d(num_channels, num_filters, kernel_size=3, padding=1)
@@ -22,15 +22,22 @@ class ChessModel(nn.Module):
         # converting the features into total of 4096 outputs (all combination of a position to another position)
         self.fc2 = nn.Linear(1024, 64 * 64)
         
+        self.dropout = nn.Dropout(dropout_rate)
+        
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
+        x = self.dropout(x)
         x = F.relu(self.bn2(self.conv2(x)))
+        x = self.dropout(x)
         x = F.relu(self.bn3(self.conv3(x)))
+        x = self.dropout(x)
         x = F.relu(self.bn4(self.conv4(x)))
+        x = self.dropout(x)
         
         # reshape the tensor, flattening it from a (batch_size, 256, 8, 8), where the feature map is flattened so now it's a 2D tensor (batch_size, 256*8*8), -1 means the size of the tensor will be inferred
         x = x.view(-1, 256*8*8)
         x = F.relu(self.fc1(x))
+        x = self.dropout(x)
         x = self.fc2(x)
         return x
     
@@ -76,3 +83,7 @@ def board_to_tensor(board):
         tensor[13][rank][file] = 1
             
     return tensor
+
+# Add a learning rate scheduler
+def get_lr_scheduler(optimizer):
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)

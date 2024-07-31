@@ -3,16 +3,17 @@ import chess
 import torch
 from model import board_to_tensor
 
-def load_puzzle_data(csv_file_path):
+def load_puzzle_data(*csv_file_paths):
     puzzles = []
-    with open(csv_file_path, 'r') as file:
-        csv_reader = csv.reader(file)
-        for row in csv_reader:
-            puzzles.append({
-                'fen': row[1],
-                'moves': row[2].split(),
-                'rating': int(row[3])
-            })
+    for csv_file_path in csv_file_paths:
+        with open(csv_file_path, 'r') as file:
+            csv_reader = csv.reader(file)
+            for row in csv_reader:
+                puzzles.append({
+                    'fen': row[1],
+                    'moves': row[2].split(),
+                    'rating': int(row[3])
+                })
     return puzzles
 
 def process_puzzles(puzzles):
@@ -47,11 +48,21 @@ def process_puzzles(puzzles):
     return processed_data, skipped_puzzles
 
 def main():
-    csv_file_path = 'supervised_dataset/lichess_db_puzzle.csv'  
-    puzzles = load_puzzle_data(csv_file_path)
-    processed_data, skipped_puzzles = process_puzzles(puzzles)
+    train_csv_path = 'supervised_dataset/larger_lichess_db_puzzle.csv'
+    val_csv_path = 'supervised_dataset/lichess_puzzle_val.csv'
+    test_csv_path = 'supervised_dataset/lichess_puzzle_test.csv'
     
-    print(f"Total puzzles processed: {len(processed_data)}")
+    train_puzzles = load_puzzle_data(train_csv_path)
+    val_puzzles = load_puzzle_data(val_csv_path)
+    test_puzzles = load_puzzle_data(test_csv_path)
+    
+    train_data, train_skipped = process_puzzles(train_puzzles)
+    val_data, val_skipped = process_puzzles(val_puzzles)
+    test_data, test_skipped = process_puzzles(test_puzzles)
+    
+    print(f"Train puzzles processed: {len(train_data)}, skipped: {train_skipped}")
+    print(f"Validation puzzles processed: {len(val_data)}, skipped: {val_skipped}")
+    print(f"Test puzzles processed: {len(test_data)}, skipped: {test_skipped}")
     print(f"Puzzles skipped (black to move): {skipped_puzzles}")
     if processed_data:
         print(f"Sample puzzle:")

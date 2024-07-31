@@ -1,2 +1,5 @@
 venv
-latest_checkpoint.pth
+best_model_checkpoint.pth
+supervised_dataset
+reinforced_checkpoint.pth
+supervised_model.pth
