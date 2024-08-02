@@ -37,7 +37,7 @@ class ChessPuzzleDataset(Dataset):
 
         return board_tensor, target
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch, num_epochs=20, patience=3):
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch, num_epochs=30, patience=3):
     model.train()
     best_val_loss = float('inf')
     epochs_without_improvement = 0
@@ -171,7 +171,7 @@ def main():
     
     logging.info(f"Created DataLoaders: Train: {len(train_loader)} batches, Val: {len(val_loader)} batches, Test: {len(test_loader)} batches")
     
-    model = ChessModel().to(device)
+    model = ChessModel(dropout_rate=0.7).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
     scheduler = get_lr_scheduler(optimizer)

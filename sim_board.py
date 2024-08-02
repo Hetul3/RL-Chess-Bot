@@ -8,7 +8,7 @@ torch.set_num_threads(3)    # limiting threads running so it doesn't fry my macb
 
 
 def train(episodes=1000, batch_size=128, target_update=10, save_interval=5):
-    env = ChessEnv(stockfish_path="stockfish/stockfish", skill_level=0, max_depth=None, blunder_probability=0.05, think_time=0.001)
+    env = ChessEnv(stockfish_path="stockfish/stockfish", skill_level=0, max_depth=None, blunder_probability=0, think_time=0.001)
     model = ChessModel()
 
     checkpoint_path = 'reinforced_checkpoint.pth'
