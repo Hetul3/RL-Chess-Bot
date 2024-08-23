@@ -14,8 +14,13 @@ torch.set_num_threads(2)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ChessPuzzleDataset(Dataset):
-    def __init__(self, processed_data):
-        self.data = processed_data
+    def __init__(self, processed_data, start_idx=0):
+        self.full_data = processed_data
+        self.reset(start_idx)
+
+    def reset(self, start_idx=0):
+        self.data = self.full_data[start_idx:]
+        self.start_idx = start_idx
 
     def __len__(self):
         return len(self.data)
@@ -37,17 +42,24 @@ class ChessPuzzleDataset(Dataset):
 
         return board_tensor, target
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch, num_epochs=30, patience=3):
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch, start_batch, global_batch, num_epochs=5, patience=3):
     model.train()
     best_val_loss = float('inf')
     epochs_without_improvement = 0
     
     for epoch in range(start_epoch, num_epochs):
+        if epoch > start_epoch:
+            train_loader.dataset.reset()
+            start_batch = 0
+        
         running_loss = 0.0
         start_time = time.time()
-        progress_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch + 1}")
+        progress_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch + 1}", initial=start_batch)
         
-        for i, (boards, targets) in enumerate(train_loader):
+        for i, (boards, targets) in enumerate(train_loader, start=start_batch):
+            if i < start_batch:
+                continue
+            
             boards, targets = boards.to(device), targets.to(device)
             
             optimizer.zero_grad()
@@ -59,8 +71,25 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             running_loss += loss.item()
             progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
             progress_bar.update()
+            
+            global_batch += 1
+            
+            if global_batch % 100 == 0:
+                torch.save({
+                    'epoch': epoch,
+                    'batch': i + 1,
+                    'global_batch': global_batch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'loss': loss.item(),
+                }, f'checkpoint_epoch_{epoch}_batch_{i+1}.pth')
+                logging.info(f"Saved checkpoint at epoch {epoch + 1}, batch {i + 1}")
         
-        epoch_loss = running_loss / len(train_loader)
+        if len(train_loader) > 0:
+            epoch_loss = running_loss / (len(train_loader) - start_batch)
+        else:
+            epoch_loss = 0
         epoch_time = time.time() - start_time
         
         # Validate the model
@@ -68,19 +97,35 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         
         # Update learning rate
         scheduler.step(val_loss)
-        last_lr = scheduler.get_last_lr()
         
         logging.info(f'Epoch [{epoch + 1}/{num_epochs}] completed in {epoch_time:.2f} seconds. '
                      f'Train Loss: {epoch_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}')
+        
+        # Save epoch checkpoint
+        torch.save({
+            'epoch': epoch + 1,
+            'batch': 0,
+            'global_batch': global_batch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'loss': epoch_loss,
+            'val_loss': val_loss,
+            'val_accuracy': val_accuracy,
+        }, f'checkpoint_epoch_{epoch + 1}.pth')
+        logging.info(f"Saved epoch checkpoint: checkpoint_epoch_{epoch + 1}.pth")
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_without_improvement = 0
             torch.save({
-                'epoch': epoch,
+                'epoch': epoch + 1,
+                'batch': 0,
+                'global_batch': global_batch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': loss,
+                'scheduler_state_dict': scheduler.state_dict(),
+                'loss': epoch_loss,
                 'val_loss': val_loss,
                 'val_accuracy': val_accuracy,
             }, 'best_model_checkpoint.pth')
@@ -90,12 +135,14 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         if epochs_without_improvement >= patience:
             logging.info(f'Early stopping triggered after {epoch + 1} epochs')
             break
+        
+        start_batch = 0  # Reset start_batch for the next epoch
     
     # Load the best model
     best_checkpoint = torch.load('best_model_checkpoint.pth')
     model.load_state_dict(best_checkpoint['model_state_dict'])
     return model
-     
+   
 def validate_model(model, val_loader, criterion, device):
     model.eval()
     total_loss = 0
@@ -177,16 +224,37 @@ def main():
     scheduler = get_lr_scheduler(optimizer)
     
     start_epoch = 0
-    checkpoint_path = 'best_model_checkpoint.pth'
-    if os.path.exists(checkpoint_path):
+    start_batch = 0
+    global_batch = 0
+    
+    # Find the latest checkpoint
+    checkpoints = [f for f in os.listdir() if f.startswith('checkpoint_') and f.endswith('.pth')]
+    if checkpoints:
+        latest_checkpoint = max(checkpoints, key=os.path.getctime)
+        checkpoint_path = latest_checkpoint
         checkpoint = torch.load(checkpoint_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint['epoch'] + 1
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        start_epoch = checkpoint['epoch']
+        start_batch = checkpoint['batch']
+        global_batch = checkpoint['global_batch']
         logging.info(f"Resuming from checkpoint: {checkpoint_path}")
+        logging.info(f"Starting from epoch {start_epoch + 1}, batch {start_batch}")
+        
+        # Calculate the starting index for the dataset
+        start_idx = global_batch * train_loader.batch_size
+        
+        # Create new DataLoader starting from the correct position
+        train_dataset = ChessPuzzleDataset(train_data, start_idx=start_idx)
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=False)
+    else:
+        train_dataset = ChessPuzzleDataset(train_data)
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
     
     logging.info("Starting model training...")
-    model = train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch)
+    model = train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, start_epoch, start_batch, global_batch)
+
     
     logging.info("Training completed. Saving model...")
     torch.save(model.state_dict(), 'supervised_model.pth')
